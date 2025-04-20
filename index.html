@@ -1,22 +1,20 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Ghost Cat AR</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <style>
-    body {
-      margin: 0;
-      overflow: hidden;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    }
+    body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
     #overlay {
       position: absolute;
       top: 20px;
-      left: 20px;
+      left: 50%;
+      transform: translateX(-50%);
       z-index: 1;
-      color: white;
-      text-shadow: 1px 1px 3px rgba(0,0,0,0.7);
+      text-align: center;
     }
     #start-button {
       padding: 12px 24px;
@@ -25,162 +23,138 @@
       color: white;
       border: none;
       border-radius: 30px;
+      box-shadow: 0 4px 8px rgba(0,0,0,0.2);
       cursor: pointer;
       transition: all 0.3s ease;
     }
     #start-button:hover {
       background: rgba(72, 118, 255, 1);
       transform: translateY(-2px);
-    }
-    #status {
-      margin-top: 15px;
-      font-size: 20px;
-      background: rgba(0, 0, 0, 0.5);
-      padding: 10px 15px;
-      border-radius: 12px;
-      backdrop-filter: blur(5px);
-      display: none;
+      box-shadow: 0 6px 12px rgba(0,0,0,0.3);
     }
   </style>
 </head>
 <body>
   <div id="overlay">
-    <button id="start-button">Start AR Experience</button>
-    <div id="status">Tap to place your ghost cat</div>
+    <button id="start-button">Start Ghost Cat AR</button>
   </div>
-
   <script type="module">
     import * as THREE from 'https://unpkg.com/three@0.150.1/build/three.module.js';
     import { ARButton } from 'https://unpkg.com/three@0.150.1/examples/jsm/webxr/ARButton.js';
     import { GLTFLoader } from 'https://unpkg.com/three@0.150.1/examples/jsm/loaders/GLTFLoader.js';
 
     let camera, scene, renderer;
-    let reticle, hitTestSource = null, hitTestViewerSpace = null;
-    let catModel = null, ghostCat = null, ghostOriginY = 0;
-    let clock = new THREE.Clock();
+    let reticle, hitTestSource = null, hitTestSourceRequested = false;
+    let ghostCat, audioListener, purrSound;
 
     init();
 
     function init() {
       scene = new THREE.Scene();
-      camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.01, 20);
+      camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.xr.enabled = true;
+      renderer.setClearColor(0x000000, 0);
       document.body.appendChild(renderer.domElement);
 
-      // Lights
-      scene.add(new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1));
-      const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
-      dirLight.position.set(0, 10, 0);
-      scene.add(dirLight);
+      // Load ghost cat model
+      const loader = new GLTFLoader();
+      loader.load('ghost_cat.glb', (gltf) => {
+        ghostCat = gltf.scene;
+        ghostCat.scale.set(0.2, 0.2, 0.2);
+        ghostCat.visible = false;
+        scene.add(ghostCat);
 
-      // Load your ghost cat
-      new GLTFLoader().load(
-        'ghost_cat.glb',
-        gltf => { catModel = gltf.scene; },
-        undefined,
-        err => console.error('Error loading GLB:', err)
-      );
+        // Spatial audio setup
+        audioListener = new THREE.AudioListener();
+        camera.add(audioListener);
+        purrSound = new THREE.PositionalAudio(audioListener);
+        const audioLoader = new THREE.AudioLoader();
+        audioLoader.load('cat_purring.mp3', (buffer) => {
+          purrSound.setBuffer(buffer);
+          purrSound.setLoop(true);
+          purrSound.setRefDistance(1);
+          purrSound.setVolume(1.0);
+        });
+        ghostCat.add(purrSound);
+      });
 
-      // UI
-      const btn = document.getElementById('start-button');
-      btn.addEventListener('click', () => {
+      // Reticle for placement
+      const ring = new THREE.RingGeometry(0.1, 0.15, 32).rotateX(-Math.PI / 2);
+      const ringMat = new THREE.MeshBasicMaterial({ color: 0xFFFFFF });
+      reticle = new THREE.Mesh(ring, ringMat);
+      reticle.matrixAutoUpdate = false;
+      reticle.visible = false;
+      scene.add(reticle);
+
+      // Start AR button
+      document.getElementById('start-button').addEventListener('click', () => {
         if (navigator.xr) {
-          navigator.xr.isSessionSupported('immersive-ar').then(supported => {
+          navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
             if (supported) {
               const sessionInit = {
-                optionalFeatures: ['dom-overlay','light-estimation','hit-test'],
+                optionalFeatures: ['dom-overlay', 'hit-test'],
                 domOverlay: { root: document.body }
               };
-              navigator.xr.requestSession('immersive-ar', sessionInit)
-                      .then(onSessionStarted);
+              navigator.xr.requestSession('immersive-ar', sessionInit).then(onSessionStarted);
             } else {
-              alert('WebXR AR not supported on this device.');
+              alert('AR not supported on this device.');
             }
           });
         } else {
           alert('WebXR not available in this browser.');
         }
       });
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
     }
 
     function onSessionStarted(session) {
-      renderer.xr.setSession(session);
-      renderer.xr.setReferenceSpaceType('local');
-
-      document.getElementById('start-button').style.display = 'none';
-      const status = document.getElementById('status');
-      status.style.display = 'block';
-
-      // Reticle
-      const ring = new THREE.RingGeometry(0.1, 0.12, 32).rotateX(-Math.PI/2);
-      const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-      reticle = new THREE.Mesh(ring, mat);
-      reticle.matrixAutoUpdate = false;
-      reticle.visible = false;
-      scene.add(reticle);
-
-      session.requestReferenceSpace('viewer').then(space => {
-        session.requestHitTestSource({ space }).then(source => hitTestSource = source);
+      session.addEventListener('select', () => {
+        if (reticle.visible && ghostCat) {
+          ghostCat.position.setFromMatrixPosition(reticle.matrix);
+          ghostCat.visible = true;
+          if (purrSound.isBuffer) purrSound.play();
+        }
       });
-      session.addEventListener('end', () => hitTestSource = null);
 
-      const controller = renderer.xr.getController(0);
-      controller.addEventListener('select', onSelect);
-      scene.add(controller);
-
+      renderer.xr.setReferenceSpaceType('local');
+      renderer.xr.setSession(session);
+      document.getElementById('overlay').style.display = 'none';
       renderer.setAnimationLoop(render);
     }
 
-    function onSelect() {
-      if (!catModel || !reticle.visible || ghostCat) return;
-
-      ghostCat = catModel.clone();
-      ghostCat.position.setFromMatrixPosition(reticle.matrix);
-      ghostCat.quaternion.setFromRotationMatrix(reticle.matrix);
-      ghostOriginY = ghostCat.position.y;
-      ghostCat.scale.set(0.5, 0.5, 0.5);
-      scene.add(ghostCat);
-
-      // Spatial purr
-      const listener = new THREE.AudioListener();
-      camera.add(listener);
-      const purr = new THREE.PositionalAudio(listener);
-      new THREE.AudioLoader().load(
-        'cat_purring.mp3',
-        buffer => {
-          purr.setBuffer(buffer);
-          purr.setLoop(true);
-          purr.setRefDistance(1);
-          purr.play();
-        },
-        undefined,
-        err => console.error('Error loading audio:', err)
-      );
-      ghostCat.add(purr);
-
-      reticle.visible = false;
-      document.getElementById('status').innerText = 'Your ghost cat is here!';
-    }
-
     function render(timestamp, frame) {
-      if (frame && hitTestSource && !ghostCat) {
-        const refSpace = renderer.xr.getReferenceSpace();
-        const hits = frame.getHitTestResults(hitTestSource);
-        if (hits.length) {
-          const pose = hits[0].getPose(refSpace);
-          reticle.visible = true;
-          reticle.matrix.fromArray(pose.transform.matrix);
-        } else {
-          reticle.visible = false;
-        }
-      }
+      if (frame) {
+        const referenceSpace = renderer.xr.getReferenceSpace();
+        const session = renderer.xr.getSession();
 
-      if (ghostCat) {
-        const t = clock.getElapsedTime();
-        ghostCat.position.y = ghostOriginY + Math.sin(t * 1.5) * 0.05;
-        ghostCat.rotation.y += 0.005;
+        if (!hitTestSourceRequested) {
+          session.requestReferenceSpace('viewer').then((viewerSpace) => {
+            session.requestHitTestSource({ space: viewerSpace }).then((source) => {
+              hitTestSource = source;
+            });
+          });
+          hitTestSourceRequested = true;
+        }
+
+        if (hitTestSource) {
+          const hitTestResults = frame.getHitTestResults(hitTestSource);
+          if (hitTestResults.length > 0) {
+            const hit = hitTestResults[0];
+            const pose = hit.getPose(referenceSpace);
+            reticle.visible = true;
+            reticle.matrix.fromArray(pose.transform.matrix);
+          } else {
+            reticle.visible = false;
+          }
+        }
       }
 
       renderer.render(scene, camera);
