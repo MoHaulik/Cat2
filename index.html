@@ -40,16 +40,15 @@
   </div>
   <script type="module">
     import * as THREE from 'https://unpkg.com/three@0.150.1/build/three.module.js';
-    import { ARButton } from 'https://unpkg.com/three@0.150.1/examples/jsm/webxr/ARButton.js';
     import { GLTFLoader } from 'https://unpkg.com/three@0.150.1/examples/jsm/loaders/GLTFLoader.js';
 
     let camera, scene, renderer;
-    let reticle, hitTestSource = null, hitTestSourceRequested = false;
     let ghostCat, audioListener, purrSound;
 
     init();
 
     function init() {
+      // Scene setup
       scene = new THREE.Scene();
       camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
@@ -59,7 +58,7 @@
       renderer.setClearColor(0x000000, 0);
       document.body.appendChild(renderer.domElement);
 
-      // Load ghost cat model
+      // Load ghost cat model and spatial audio
       const loader = new GLTFLoader();
       loader.load('ghost_cat.glb', (gltf) => {
         ghostCat = gltf.scene;
@@ -67,12 +66,10 @@
         ghostCat.visible = false;
         scene.add(ghostCat);
 
-        // Spatial audio setup
         audioListener = new THREE.AudioListener();
         camera.add(audioListener);
         purrSound = new THREE.PositionalAudio(audioListener);
-        const audioLoader = new THREE.AudioLoader();
-        audioLoader.load('cat_purring.mp3', (buffer) => {
+        new THREE.AudioLoader().load('cat_purring.mp3', (buffer) => {
           purrSound.setBuffer(buffer);
           purrSound.setLoop(true);
           purrSound.setRefDistance(1);
@@ -81,33 +78,22 @@
         ghostCat.add(purrSound);
       });
 
-      // Reticle for placement
-      const ring = new THREE.RingGeometry(0.1, 0.15, 32).rotateX(-Math.PI / 2);
-      const ringMat = new THREE.MeshBasicMaterial({ color: 0xFFFFFF });
-      reticle = new THREE.Mesh(ring, ringMat);
-      reticle.matrixAutoUpdate = false;
-      reticle.visible = false;
-      scene.add(reticle);
-
-      // Start AR button
-      document.getElementById('start-button').addEventListener('click', () => {
-        if (navigator.xr) {
-          navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
-            if (supported) {
-              const sessionInit = {
-                optionalFeatures: ['dom-overlay', 'hit-test'],
-                domOverlay: { root: document.body }
-              };
-              navigator.xr.requestSession('immersive-ar', sessionInit).then(onSessionStarted);
-            } else {
-              alert('AR not supported on this device.');
-            }
+      // Start button with direct requestSession in gesture
+      document.getElementById('start-button').addEventListener('click', async () => {
+        if (!navigator.xr) return alert('WebXR not available in this browser.');
+        try {
+          const session = await navigator.xr.requestSession('immersive-ar', {
+            optionalFeatures: ['dom-overlay'],
+            domOverlay: { root: document.body }
           });
-        } else {
-          alert('WebXR not available in this browser.');
+          onSessionStarted(session);
+        } catch (err) {
+          console.error('ARSession failed:', err);
+          alert('Failed to start AR: ' + err.message);
         }
       });
 
+      // Handle resize
       window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
@@ -116,9 +102,11 @@
     }
 
     function onSessionStarted(session) {
+      // Place ghost cat at a fixed distance in front of the user
       session.addEventListener('select', () => {
-        if (reticle.visible && ghostCat) {
-          ghostCat.position.setFromMatrixPosition(reticle.matrix);
+        if (ghostCat) {
+          const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+          ghostCat.position.copy(camera.position).add(dir.multiplyScalar(2));
           ghostCat.visible = true;
           if (purrSound.isBuffer) purrSound.play();
         }
@@ -127,37 +115,7 @@
       renderer.xr.setReferenceSpaceType('local');
       renderer.xr.setSession(session);
       document.getElementById('overlay').style.display = 'none';
-      renderer.setAnimationLoop(render);
-    }
-
-    function render(timestamp, frame) {
-      if (frame) {
-        const referenceSpace = renderer.xr.getReferenceSpace();
-        const session = renderer.xr.getSession();
-
-        if (!hitTestSourceRequested) {
-          session.requestReferenceSpace('viewer').then((viewerSpace) => {
-            session.requestHitTestSource({ space: viewerSpace }).then((source) => {
-              hitTestSource = source;
-            });
-          });
-          hitTestSourceRequested = true;
-        }
-
-        if (hitTestSource) {
-          const hitTestResults = frame.getHitTestResults(hitTestSource);
-          if (hitTestResults.length > 0) {
-            const hit = hitTestResults[0];
-            const pose = hit.getPose(referenceSpace);
-            reticle.visible = true;
-            reticle.matrix.fromArray(pose.transform.matrix);
-          } else {
-            reticle.visible = false;
-          }
-        }
-      }
-
-      renderer.render(scene, camera);
+      renderer.setAnimationLoop(() => renderer.render(scene, camera));
     }
   </script>
 </body>
