@@ -40,6 +40,7 @@
   </div>
   <script type="module">
     import * as THREE from 'https://unpkg.com/three@0.150.1/build/three.module.js';
+    import { ARButton } from 'https://unpkg.com/three@0.150.1/examples/jsm/webxr/ARButton.js';
     import { GLTFLoader } from 'https://unpkg.com/three@0.150.1/examples/jsm/loaders/GLTFLoader.js';
 
     let camera, scene, renderer;
@@ -48,7 +49,6 @@
     init();
 
     function init() {
-      // Scene setup
       scene = new THREE.Scene();
       camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
@@ -58,7 +58,7 @@
       renderer.setClearColor(0x000000, 0);
       document.body.appendChild(renderer.domElement);
 
-      // Load ghost cat model and spatial audio
+      // Load ghost cat model
       const loader = new GLTFLoader();
       loader.load('ghost_cat.glb', (gltf) => {
         ghostCat = gltf.scene;
@@ -66,10 +66,12 @@
         ghostCat.visible = false;
         scene.add(ghostCat);
 
+        // Spatial audio setup
         audioListener = new THREE.AudioListener();
         camera.add(audioListener);
         purrSound = new THREE.PositionalAudio(audioListener);
-        new THREE.AudioLoader().load('cat_purring.mp3', (buffer) => {
+        const audioLoader = new THREE.AudioLoader();
+        audioLoader.load('cat_purring.mp3', (buffer) => {
           purrSound.setBuffer(buffer);
           purrSound.setLoop(true);
           purrSound.setRefDistance(1);
@@ -78,9 +80,9 @@
         ghostCat.add(purrSound);
       });
 
-      // Start button with direct requestSession in gesture
+      // Start AR session on button click
       document.getElementById('start-button').addEventListener('click', async () => {
-        if (!navigator.xr) return alert('WebXR not available in this browser.');
+        if (!navigator.xr) return alert('WebXR not available');
         try {
           const session = await navigator.xr.requestSession('immersive-ar', {
             optionalFeatures: ['dom-overlay'],
@@ -88,12 +90,10 @@
           });
           onSessionStarted(session);
         } catch (err) {
-          console.error('ARSession failed:', err);
           alert('Failed to start AR: ' + err.message);
         }
       });
 
-      // Handle resize
       window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
@@ -102,19 +102,26 @@
     }
 
     function onSessionStarted(session) {
-      // Place ghost cat at a fixed distance in front of the user
-      session.addEventListener('select', () => {
-        if (ghostCat) {
-          const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-          ghostCat.position.copy(camera.position).add(dir.multiplyScalar(2));
-          ghostCat.visible = true;
-          if (purrSound.isBuffer) purrSound.play();
-        }
-      });
-
       renderer.xr.setReferenceSpaceType('local');
       renderer.xr.setSession(session);
       document.getElementById('overlay').style.display = 'none';
+
+      // Place ghost cat in front of camera on tap
+      session.addEventListener('select', () => {
+        if (!ghostCat) return;
+        const camMatrix = new THREE.Matrix4().fromArray(
+          renderer.xr.getCamera(camera).matrixWorld.elements
+        );
+        const position = new THREE.Vector3();
+        const direction = new THREE.Vector3(0, 0, -1);
+        position.setFromMatrixPosition(camMatrix);
+        direction.transformDirection(camMatrix);
+        position.add(direction.multiplyScalar(1.5));
+        ghostCat.position.copy(position);
+        ghostCat.visible = true;
+        if (purrSound.isBuffer && !purrSound.isPlaying) purrSound.play();
+      });
+
       renderer.setAnimationLoop(() => renderer.render(scene, camera));
     }
   </script>
